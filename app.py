@@ -16,6 +16,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import streamlit as st
+
+# ── Support Streamlit Cloud secrets ─────────────────────────────────
+# On Streamlit Community Cloud, the API key is stored as a "secret"
+# rather than in a .env file. This bridges the two approaches so
+# agents.py can always just read os.getenv().
+try:
+    if "GOOGLE_API_KEY" in st.secrets:
+        os.environ["GOOGLE_API_KEY"] = st.secrets["GOOGLE_API_KEY"]
+except FileNotFoundError:
+    pass  # no secrets file (local dev) — .env handles it
 import json
 from pipeline import run_pipeline
 
