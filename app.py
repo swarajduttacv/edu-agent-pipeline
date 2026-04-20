@@ -28,6 +28,7 @@ import json
 from schemas import GenerateRequest, RunArtifact
 from orchestrator import run_pipeline
 from storage import get_history
+from llm import set_demo_mode, is_demo_mode
 
 # ── Page config ─────────────────────────────────────────────────────
 st.set_page_config(
@@ -125,6 +126,19 @@ with st.sidebar:
             placeholder="e.g., Photosynthesis, Fractions, Solar System",
             help="What should the lesson cover?"
         )
+
+        st.divider()
+
+        demo_on = st.toggle(
+            "🧪 Demo Mode",
+            value=is_demo_mode(),
+            help="Use pre-built responses instead of live LLM calls. "
+                 "Useful when API quota is exhausted — the full pipeline "
+                 "still runs through all validation, scoring, and orchestration."
+        )
+        set_demo_mode(demo_on)
+        if demo_on:
+            st.caption("⚡ Demo mode: pipeline runs with mock data")
 
         st.divider()
         run_clicked = st.button("▶ Run Pipeline", type="primary", use_container_width=True)
