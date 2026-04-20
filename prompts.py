@@ -1,23 +1,21 @@
 """
-Prompt templates for the generator and reviewer agents.
+Prompt templates for all four agents.
 
-The trick here is being very explicit about the JSON schema we expect.
-LLMs are surprisingly good at following structure if you spell it out
-clearly, but they also love adding extra commentary, so we explicitly
-tell them not to.
+Each function returns (system_prompt, user_prompt) so the caller
+just passes them straight to llm.call_llm().
 """
 
 import json
 
 
-def build_generator_prompt(grade: int, topic: str, feedback=None):
-    """Builds the system + user prompt for content generation.
-    
-    If feedback is provided (from a failed review), we weave it into
-    the prompt so the model knows exactly what to fix.
-    """
+# ── Generator prompts ────────────────────────────────────────────────
 
-    # adjust vocabulary expectations based on grade band
+def build_generator_prompt(grade: int, topic: str, feedback=None):
+    """Build the system + user prompt for content generation.
+
+    Feedback is a list of FeedbackItem dicts from a failed review,
+    only populated during refinement passes.
+    """
     if grade <= 3:
         complexity = "very simple words, short sentences, like talking to a young child"
     elif grade <= 6:
@@ -28,14 +26,23 @@ def build_generator_prompt(grade: int, topic: str, feedback=None):
         complexity = "detailed but accessible language for a high school student"
 
     schema_example = {
-        "explanation": "A clear, kid-friendly explanation of the topic...",
+        "explanation": {
+            "text": "A clear, kid-friendly explanation of the topic...",
+            "grade": grade
+        },
         "mcqs": [
             {
                 "question": "What is ...?",
-                "options": ["Option A text", "Option B text", "Option C text", "Option D text"],
-                "answer": "A"
+                "options": ["Option A", "Option B", "Option C", "Option D"],
+                "correct_index": 1
             }
-        ]
+        ],
+        "teacher_notes": {
+            "learning_objective": "Students will be able to ...",
+            "common_misconceptions": [
+                "Students often think that ..."
+            ]
+        }
     }
 
     system_msg = (
@@ -49,22 +56,27 @@ def build_generator_prompt(grade: int, topic: str, feedback=None):
 Language level: {complexity}
 
 Requirements:
-- Write a clear explanation (4-8 sentences) covering the key concepts
-- Create exactly 3 multiple-choice questions that test understanding of the explanation
-- Each question must have exactly 4 options labeled A through D
-- The "answer" field should be the letter (A, B, C, or D) of the correct option
-- Make sure questions only test concepts mentioned in your explanation
-- Keep everything age-appropriate for grade {grade}
+- Write a clear explanation (4-8 sentences) covering the key concepts. Set the "grade" field to {grade}.
+- Create exactly 3 multiple-choice questions testing understanding of the explanation.
+- Each question must have exactly 4 options (strings).
+- The "correct_index" must be the 0-based index (0, 1, 2, or 3) of the correct option.
+- Include teacher notes with a learning objective and at least 2 common misconceptions.
+- Make everything age-appropriate for grade {grade}.
 
-Your response must match this JSON structure exactly:
+Your response MUST match this JSON structure exactly:
 {json.dumps(schema_example, indent=2)}
 """
 
-    # if we're retrying after a failed review, append the feedback
     if feedback and len(feedback) > 0:
-        feedback_str = "\n".join(f"  - {fb}" for fb in feedback)
+        feedback_lines = []
+        for item in feedback:
+            if isinstance(item, dict):
+                feedback_lines.append(f"  - [{item.get('field', '?')}] {item.get('issue', '')}")
+            else:
+                feedback_lines.append(f"  - {item}")
+        feedback_str = "\n".join(feedback_lines)
         user_msg += f"""
-IMPORTANT — Previous version was rejected by the reviewer. Fix these issues:
+IMPORTANT — Previous version was rejected by the reviewer. Fix these specific issues:
 {feedback_str}
 
 Rewrite the content addressing ALL feedback points above.
@@ -73,22 +85,33 @@ Rewrite the content addressing ALL feedback points above.
     return system_msg, user_msg
 
 
+# ── Reviewer prompts ─────────────────────────────────────────────────
+
 def build_reviewer_prompt(grade: int, topic: str, content_json: dict):
-    """Builds the review prompt. We pass the full generated content
-    plus the original grade/topic so the reviewer can check
-    age-appropriateness properly.
-    """
+    """Build the review prompt with scoring rubric."""
 
     schema_example = {
-        "status": "pass",
+        "scores": {
+            "age_appropriateness": 5,
+            "correctness": 5,
+            "clarity": 4,
+            "coverage": 4
+        },
+        "pass": True,
         "feedback": []
     }
 
     fail_example = {
-        "status": "fail",
+        "scores": {
+            "age_appropriateness": 3,
+            "correctness": 4,
+            "clarity": 2,
+            "coverage": 4
+        },
+        "pass": False,
         "feedback": [
-            "The explanation uses vocabulary too advanced for the grade level",
-            "Question 2 has an incorrect answer key"
+            {"field": "explanation.text", "issue": "Sentence too complex for the grade level"},
+            {"field": "mcqs[1].question", "issue": "Question is ambiguous"}
         ]
     }
 
@@ -103,22 +126,118 @@ def build_reviewer_prompt(grade: int, topic: str, content_json: dict):
 Content to review:
 {json.dumps(content_json, indent=2)}
 
-Evaluate against these criteria:
-1. AGE APPROPRIATENESS: Is the language suitable for grade {grade}? No overly complex words or concepts.
-2. CORRECTNESS: Are all facts accurate? Are all MCQ answers correct?
+Score each dimension on a 1-5 scale:
+1. AGE_APPROPRIATENESS: Is the language suitable for grade {grade}?
+2. CORRECTNESS: Are all facts accurate? Are MCQ answers correct? Is correct_index valid?
 3. CLARITY: Is the explanation easy to follow? Are questions unambiguous?
-4. COMPLETENESS: Does the explanation cover the topic adequately? Do MCQs align with the explanation?
-5. STRUCTURE: Are there exactly 4 options per question? Is each answer A/B/C/D?
+4. COVERAGE: Does the explanation cover the topic adequately? Do MCQs align with the explanation?
 
-Rules:
-- If ALL criteria pass, respond with status "pass" and an empty feedback list
-- If ANY criterion fails, respond with status "fail" and list specific, actionable feedback
-- Be constructive but strict — this content is for real students
-- Each feedback item should be a single clear sentence
+For each issue found, provide a feedback item with:
+- "field": the dot-path to the problematic field (e.g. "explanation.text", "mcqs[0].question", "teacher_notes.common_misconceptions[0]")
+- "issue": a clear description of what's wrong
 
-Respond in this JSON format:
+If all scores are high and no issues found, set "pass" to true with empty feedback.
+If any score is below 4 (or coverage below 3), set "pass" to false.
+
 Pass example: {json.dumps(schema_example)}
 Fail example: {json.dumps(fail_example)}
+"""
+
+    return system_msg, user_msg
+
+
+# ── Refiner prompts ──────────────────────────────────────────────────
+
+def build_refiner_prompt(grade: int, topic: str, draft_json: dict,
+                         feedback_items: list):
+    """Build refiner prompt — includes the original draft and specific feedback."""
+
+    schema_example = {
+        "explanation": {
+            "text": "Improved explanation...",
+            "grade": grade
+        },
+        "mcqs": [
+            {
+                "question": "Improved question...",
+                "options": ["A", "B", "C", "D"],
+                "correct_index": 0
+            }
+        ],
+        "teacher_notes": {
+            "learning_objective": "...",
+            "common_misconceptions": ["..."]
+        }
+    }
+
+    system_msg = (
+        "You are an expert educational content editor. "
+        "You MUST respond with ONLY valid JSON, no markdown, no code fences, no extra text. "
+        "Your job is to fix specific issues in existing content while keeping what already works."
+    )
+
+    feedback_str = "\n".join(
+        f"  - [{item.get('field', '?')}] {item.get('issue', '')}"
+        for item in feedback_items
+    )
+
+    user_msg = f"""Improve the following educational content for Grade {grade} on "{topic}".
+
+Current draft (needs fixes):
+{json.dumps(draft_json, indent=2)}
+
+Issues identified by the reviewer:
+{feedback_str}
+
+Instructions:
+- Fix EVERY issue listed above
+- Keep parts that weren't flagged — don't rewrite the whole thing unnecessarily
+- Maintain exactly 3 MCQs with exactly 4 options each
+- correct_index must be 0-based (0, 1, 2, or 3)
+- Include teacher_notes with learning_objective and at least 2 common_misconceptions
+- Keep language appropriate for grade {grade}
+
+Output the corrected content matching this JSON structure:
+{json.dumps(schema_example, indent=2)}
+"""
+
+    return system_msg, user_msg
+
+
+# ── Tagger prompts ───────────────────────────────────────────────────
+
+def build_tagger_prompt(content_json: dict, grade: int):
+    """Build tagger prompt to classify approved content."""
+
+    schema_example = {
+        "subject": "Mathematics",
+        "topic": "Fractions",
+        "grade": grade,
+        "difficulty": "Medium",
+        "content_type": ["Explanation", "Quiz"],
+        "blooms_level": "Understanding"
+    }
+
+    system_msg = (
+        "You are a content classifier for an educational platform. "
+        "You MUST respond with ONLY valid JSON, no markdown, no code fences, no extra text."
+    )
+
+    user_msg = f"""Classify the following educational content.
+
+Content:
+{json.dumps(content_json, indent=2)}
+
+Rules:
+- "subject": the broad academic subject (e.g. "Mathematics", "Science", "English")
+- "topic": a concise topic label
+- "grade": {grade}
+- "difficulty": one of "Easy", "Medium", "Hard" based on content complexity relative to grade
+- "content_type": list of content types present (e.g. ["Explanation", "Quiz"])
+- "blooms_level": one of "Remembering", "Understanding", "Applying", "Analyzing", "Evaluating", "Creating"
+
+Output this exact JSON structure:
+{json.dumps(schema_example, indent=2)}
 """
 
     return system_msg, user_msg
