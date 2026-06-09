@@ -1,4 +1,16 @@
+<div align="center">
+<img width="1200" height="400" alt="edu-agent-pipeline banner" src="./assets/banner.png" />
+
 # edu-agent-pipeline
+
+**governed ai pipeline for educational content — generate, review, refine, tag**
+
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
+[![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io)
+[![Gemini](https://img.shields.io/badge/Gemini_AI-powered-4285F4?logo=google&logoColor=white)](https://ai.google.dev)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+</div>
 
 a governed ai pipeline that generates, reviews, refines, and tags educational content — with full audit trails. four specialized agents collaborate through a deterministic orchestrator: generator creates grade-appropriate content, reviewer scores it quantitatively, refiner fixes issues using field-level feedback, and tagger classifies approved output.
 
