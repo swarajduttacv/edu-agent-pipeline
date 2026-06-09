@@ -1,8 +1,18 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 .env
+.env.local
 .streamlit/
 *.db
 tests/__pycache__/
 agents/__pycache__/
+
+# editor
+.vscode/
+.idea/
+
+# os
+.DS_Store
+Thumbs.db
