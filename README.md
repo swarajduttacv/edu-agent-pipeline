@@ -1,5 +1,5 @@
 <div align="center">
-<img width="1200" height="400" alt="edu-agent-pipeline banner" src="./assets/banner.png" />
+<img width="1200" height="400" alt="edu-agent-pipeline banner" src="./assets/banner_edu_17809874646711.png" />
 
 # edu-agent-pipeline
 
